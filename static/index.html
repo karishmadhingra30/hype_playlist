@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hype Playlist</title>
+<meta name="description" content="Tell it what you are about to walk into. Get a playlist with reasons.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<main class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Hype Playlist Generator</p>
+    <h1 class="display hero">What are you<br>about to walk into?</h1>
+    <p class="sub">Pick the moment. Get eight to twenty tracks and the reason each one is there.</p>
+  </header>
+
+  <section class="block" aria-labelledby="presets-label">
+    <h2 class="label" id="presets-label">The situation</h2>
+    <div class="presets" id="presets">
+      <!-- populated by app.js from the PRESETS config -->
+      <button class="preset" type="button" data-key="meeting">
+        <span class="preset-idx">01</span>
+        <span class="display preset-name">Big meeting</span>
+      </button>
+      <button class="preset" type="button" data-key="date">
+        <span class="preset-idx">02</span>
+        <span class="display preset-name">First date</span>
+      </button>
+      <button class="preset" type="button" data-key="gym">
+        <span class="preset-idx">03</span>
+        <span class="display preset-name">Gym</span>
+      </button>
+      <button class="preset" type="button" data-key="shower">
+        <span class="preset-idx">04</span>
+        <span class="display preset-name">Crying in the shower</span>
+      </button>
+      <button class="preset" type="button" data-key="3pm">
+        <span class="preset-idx">05</span>
+        <span class="display preset-name">3pm and I have done nothing</span>
+      </button>
+      <button class="preset" type="button" data-key="cleaning">
+        <span class="preset-idx">06</span>
+        <span class="display preset-name">Cleaning the entire apartment</span>
+      </button>
+      <button class="preset" type="button" data-key="badnews">
+        <span class="preset-idx">07</span>
+        <span class="display preset-name">Driving home after bad news</span>
+      </button>
+      <button class="preset" type="button" data-key="email">
+        <span class="preset-idx">08</span>
+        <span class="display preset-name">Sending the email I've been avoiding</span>
+      </button>
+    </div>
+
+    <div class="own">
+      <label class="label" for="situation">Or say it yourself</label>
+      <input id="situation" class="own-input" type="text" autocomplete="off"
+             placeholder="presenting to my skip-level for the first time">
+    </div>
+  </section>
+
+  <section class="block dials" aria-label="Playlist settings">
+    <div class="dial">
+      <h2 class="label">How long</h2>
+      <div class="segmented" id="length" role="radiogroup" aria-label="Playlist length">
+        <button type="button" role="radio" aria-checked="false" data-value="short">Short<em>6</em></button>
+        <button type="button" role="radio" aria-checked="true" data-value="medium">Medium<em>12</em></button>
+        <button type="button" role="radio" aria-checked="false" data-value="long">Long<em>20</em></button>
+      </div>
+    </div>
+
+    <div class="dial">
+      <h2 class="label">How far do we go</h2>
+      <div class="slider-wrap">
+        <input id="vibe" class="slider" type="range" min="0" max="100" value="50" step="1"
+               aria-label="Vibe: calm to unhinged">
+        <div class="slider-ends">
+          <span>Calm</span>
+          <span class="vibe-read" id="vibe-read">Balanced</span>
+          <span>Unhinged</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <button class="generate" id="generate" type="button">
+    <span>Make the playlist</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22"><path d="M4 12h15m0 0-6-6m6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
+  </button>
+
+  <p class="error" id="error" hidden></p>
+
+  <section class="loading" id="loading" hidden aria-live="polite">
+    <span class="pulse" aria-hidden="true"></span>
+    <p class="display loading-line" id="loading-line">consulting the vibes</p>
+  </section>
+
+  <section class="results" id="results" aria-live="polite">
+    <div class="results-head">
+      <p class="label">The playlist</p>
+      <h2 class="display playlist-name" id="playlist-name">Composure, Borrowed</h2>
+      <p class="vibe-note" id="vibe-note">Starts steady enough to fake it, tilts arrogant through the middle, and lands somewhere you could walk out of a room on.</p>
+    </div>
+
+    <ol class="tracks" id="tracks">
+      <li class="track" style="--i:0">
+        <span class="track-idx">1</span>
+        <div class="track-body">
+          <h3 class="display track-title">Nightcall</h3>
+          <p class="track-artist">Kavinsky</p>
+          <p class="track-reason">Nothing has happened yet and it already sounds inevitable.</p>
+        </div>
+      </li>
+      <li class="track" style="--i:1">
+        <span class="track-idx">2</span>
+        <div class="track-body">
+          <h3 class="display track-title">Bad Habit</h3>
+          <p class="track-artist">Steve Lacy</p>
+          <p class="track-reason">Loose enough to unclench your jaw before you get in the elevator.</p>
+        </div>
+      </li>
+      <li class="track" style="--i:2">
+        <span class="track-idx">3</span>
+        <div class="track-body">
+          <h3 class="display track-title">Seventeen</h3>
+          <p class="track-artist">Sharon Van Etten</p>
+          <p class="track-reason">Builds for ninety seconds before it goes anywhere, which is the point.</p>
+        </div>
+      </li>
+      <li class="track" style="--i:3">
+        <span class="track-idx">4</span>
+        <div class="track-body">
+          <h3 class="display track-title">Mr. Fingers</h3>
+          <p class="track-artist">Larry Heard</p>
+          <p class="track-reason">A deep cut that keeps your pulse flat while everything else speeds up.</p>
+        </div>
+      </li>
+      <li class="track" style="--i:4">
+        <span class="track-idx">5</span>
+        <div class="track-body">
+          <h3 class="display track-title">Deceptacon</h3>
+          <p class="track-artist">Le Tigre</p>
+          <p class="track-reason">The tonal left turn. You need one song that refuses to be reasonable.</p>
+        </div>
+      </li>
+      <li class="track" style="--i:5">
+        <span class="track-idx">6</span>
+        <div class="track-body">
+          <h3 class="display track-title">Green Aphrodisiac</h3>
+          <p class="track-artist">Corinne Bailey Rae</p>
+          <p class="track-reason">Lands you back on the ground without letting the air out.</p>
+        </div>
+      </li>
+    </ol>
+
+    <div class="export">
+      <button class="spotify" id="spotify" type="button">Send to Spotify</button>
+      <p class="export-note" id="export-note" hidden></p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p>Built with Claude. Tracks are suggestions, not prescriptions.</p>
+  </footer>
+
+</main>
+
+</body>
+</html>
