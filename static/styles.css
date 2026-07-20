@@ -37,6 +37,9 @@
 
 * { box-sizing: border-box; }
 
+/* the attribute has to beat the flex/grid display rules below */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
