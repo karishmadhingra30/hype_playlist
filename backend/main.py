@@ -4,25 +4,86 @@ Two jobs: hold the API key and serve the static frontend. All of the
 personality lives in static/ and in backend/prompts.py.
 """
 
+import json
+import os
+import re
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI
+import anthropic
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+from .prompts import SYSTEM_PROMPT, TRACK_COUNTS, build_user_prompt
 
-TRACK_COUNTS = {"short": 6, "medium": 12, "long": 20}
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+MODEL = "claude-opus-5"
 
 app = FastAPI(title="Hype Playlist", docs_url=None, redoc_url=None)
+
+_client: anthropic.Anthropic | None = None
+
+
+def get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise HTTPException(
+                status_code=503,
+                detail="ANTHROPIC_API_KEY is not set. Add it to .env and restart.",
+            )
+        _client = anthropic.Anthropic()
+    return _client
 
 
 class PlaylistRequest(BaseModel):
     situation: str = Field(min_length=1, max_length=400)
     length: Literal["short", "medium", "long"] = "medium"
     vibe: int = Field(default=50, ge=0, le=100)
+
+
+def extract_json(raw: str) -> dict:
+    """Claude is asked for bare JSON. Sometimes it fences it anyway."""
+    text = raw.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Last resort: the outermost braces in whatever came back.
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object in response")
+    return json.loads(text[start : end + 1])
+
+
+def clean_payload(data: dict, wanted: int) -> dict:
+    """Keep only well-formed tracks and cap the list at the requested length."""
+    tracks = []
+    for item in data.get("tracks") or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        artist = str(item.get("artist") or "").strip()
+        if not title or not artist:
+            continue
+        tracks.append(
+            {
+                "title": title,
+                "artist": artist,
+                "reason": str(item.get("reason") or "").strip(),
+            }
+        )
+    if not tracks:
+        raise ValueError("no usable tracks in response")
+    return {
+        "playlist_name": str(data.get("playlist_name") or "Untitled Playlist").strip(),
+        "vibe_note": str(data.get("vibe_note") or "").strip(),
+        "tracks": tracks[:wanted],
+    }
 
 
 @app.get("/")
@@ -32,25 +93,35 @@ def index() -> FileResponse:
 
 @app.post("/api/playlist")
 def create_playlist(req: PlaylistRequest) -> dict:
-    """Stubbed for now. Wired to Claude in the next step."""
-    count = TRACK_COUNTS[req.length]
-    stub = [
-        ("Nightcall", "Kavinsky", "Nothing has happened yet and it already sounds inevitable."),
-        ("Bad Habit", "Steve Lacy", "Loose enough to unclench your jaw on the way in."),
-        ("Seventeen", "Sharon Van Etten", "Builds for ninety seconds before it goes anywhere, which is the point."),
-        ("Can You Feel It", "Mr. Fingers", "Keeps your pulse flat while everything else speeds up."),
-        ("Deceptacon", "Le Tigre", "The tonal left turn. One song has to refuse to be reasonable."),
-        ("Green Aphrodisiac", "Corinne Bailey Rae", "Lands you back on the ground without letting the air out."),
-    ]
-    tracks = [
-        {"title": t, "artist": a, "reason": r}
-        for t, a, r in (stub * ((count // len(stub)) + 1))[:count]
-    ]
-    return {
-        "playlist_name": "Composure, Borrowed",
-        "vibe_note": f"Stubbed arc for '{req.situation}' at vibe {req.vibe}.",
-        "tracks": tracks,
-    }
+    client = get_client()
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=16000,
+            output_config={"effort": "medium"},
+            system=SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": build_user_prompt(req.situation, req.length, req.vibe),
+                }
+            ],
+        )
+    except anthropic.AuthenticationError:
+        raise HTTPException(status_code=503, detail="Anthropic rejected the API key.")
+    except anthropic.RateLimitError:
+        raise HTTPException(status_code=429, detail="Rate limited. Try again shortly.")
+    except anthropic.APIError as exc:
+        raise HTTPException(status_code=502, detail=f"Anthropic call failed: {exc}")
+
+    raw = "".join(b.text for b in response.content if b.type == "text")
+    try:
+        return clean_payload(extract_json(raw), TRACK_COUNTS[req.length])
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=502,
+            detail="Claude returned something that was not a playlist. Try again.",
+        )
 
 
 # Mounted last so /api/* and / are matched first.
