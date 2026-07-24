@@ -69,7 +69,10 @@ const state = {
   length: 'medium',
   busy: false,
   playlist: null,
+  spotify: { configured: false, connected: false },
 };
+
+const STORE_KEY = 'hype.playlist';
 
 let loadingTimer = null;
 
@@ -197,6 +200,7 @@ function renderPlaylist(data) {
   });
 
   el.results.hidden = false;
+  paintSpotifyButton();
 }
 
 function showError(message) {
@@ -254,6 +258,7 @@ async function generate() {
     }
 
     state.playlist = data;
+    remember(data);
     renderPlaylist(data);
     el.results.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
@@ -263,6 +268,149 @@ async function generate() {
     state.busy = false;
     el.generate.disabled = false;
   }
+}
+
+/* ---------- spotify export ---------- */
+
+function remember(data) {
+  try {
+    sessionStorage.setItem(STORE_KEY, JSON.stringify(data));
+  } catch (err) {
+    /* private mode, or storage is full. The playlist is still on screen. */
+  }
+}
+
+function recall() {
+  try {
+    const raw = sessionStorage.getItem(STORE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function paintSpotifyButton() {
+  const show = state.spotify.configured && !!state.playlist;
+  el.spotify.hidden = !show;
+  el.spotify.textContent = state.spotify.connected
+    ? 'Send to Spotify'
+    : 'Connect Spotify';
+}
+
+function showExportNote(nodes) {
+  el.exportNote.replaceChildren(...nodes);
+  el.exportNote.hidden = false;
+}
+
+function reportExport(result) {
+  const nodes = [];
+  const missed = result.missed || [];
+
+  if (missed.length === 0) {
+    nodes.push(document.createTextNode(`Added all ${result.added}. `));
+  } else {
+    nodes.push(
+      document.createTextNode(
+        `Added ${result.added} of ${result.requested}. Couldn't find: ` +
+        `${missed.join(', ')}. Nothing was swapped in for them. `
+      )
+    );
+  }
+
+  if (result.url) {
+    const link = document.createElement('a');
+    link.href = result.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Open the playlist';
+    nodes.push(link);
+  }
+
+  showExportNote(nodes);
+}
+
+async function exportToSpotify() {
+  if (!state.playlist) return;
+
+  if (!state.spotify.connected) {
+    remember(state.playlist);
+    window.location.href = '/api/spotify/login';
+    return;
+  }
+
+  el.spotify.disabled = true;
+  el.spotify.textContent = 'Sending…';
+  el.exportNote.hidden = true;
+
+  try {
+    const res = await fetch('/api/spotify/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        playlist_name: state.playlist.playlist_name,
+        vibe_note: state.playlist.vibe_note || '',
+        tracks: state.playlist.tracks,
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+
+    if (res.status === 401) {
+      state.spotify.connected = false;
+      showExportNote([document.createTextNode('Spotify session expired. Connect again.')]);
+      return;
+    }
+    if (!res.ok) {
+      throw new Error((data && data.detail) || `Export failed (${res.status}).`);
+    }
+
+    reportExport(data);
+  } catch (err) {
+    showExportNote([document.createTextNode(err.message || 'Export failed.')]);
+  } finally {
+    el.spotify.disabled = false;
+    paintSpotifyButton();
+  }
+}
+
+const REDIRECT_MESSAGES = {
+  denied: 'Spotify access was declined. The playlist is still here.',
+  badstate: 'That Spotify login did not check out. Try connecting again.',
+  failed: 'Spotify would not hand over a token. Try connecting again.',
+};
+
+async function initSpotify() {
+  try {
+    const res = await fetch('/api/spotify/status');
+    if (res.ok) state.spotify = await res.json();
+  } catch (err) {
+    /* leave export off */
+  }
+
+  if (!state.spotify.configured) {
+    console.info(
+      'Spotify export is off: SPOTIFY_CLIENT_ID is not set on the server. ' +
+      'Playlist generation works without it.'
+    );
+  }
+
+  // Coming back from the OAuth round trip, the page reloaded. Put the
+  // playlist back so the export button has something to send.
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get('spotify');
+  if (outcome) {
+    const saved = recall();
+    if (saved) {
+      state.playlist = saved;
+      renderPlaylist(saved);
+    }
+    if (REDIRECT_MESSAGES[outcome]) {
+      showExportNote([document.createTextNode(REDIRECT_MESSAGES[outcome])]);
+    }
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+
+  paintSpotifyButton();
 }
 
 /* ---------- init ---------- */
@@ -283,3 +431,6 @@ el.situation.addEventListener('keydown', (event) => {
 });
 
 el.generate.addEventListener('click', generate);
+el.spotify.addEventListener('click', exportToSpotify);
+
+initSpotify();
