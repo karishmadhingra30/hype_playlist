@@ -59,6 +59,18 @@ playlist generation depends on it.
 5. Restart `uvicorn`. The export button appears once the server sees the
    client ID.
 
+Then check the config before opening the browser:
+
+```bash
+python -m scripts.check_spotify
+```
+
+It verifies the client ID and secret against Spotify directly, flags a
+mispasted credential, catches a `.env` line that failed to parse, and prints
+the exact redirect string to compare against the dashboard. Most Spotify
+setup failures are a mismatched string rather than broken code, and the
+browser error does not tell you which string.
+
 A new app starts in development mode, which means only your own Spotify
 account can authorize it until you add other users to its allowlist. That is
 fine for running it yourself.
@@ -124,6 +136,8 @@ static/
   index.html
   styles.css   hand-written, no framework
   app.js       presets config, fetch, render
+scripts/
+  check_spotify.py   preflight for the Spotify config
 tests/
   test_spotify_flow.py
 ```
