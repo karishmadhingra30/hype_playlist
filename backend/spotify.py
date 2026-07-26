@@ -6,6 +6,7 @@ returns False and main.py never routes anything here.
 
 import base64
 import os
+import re
 import time
 from typing import Iterable
 
@@ -73,8 +74,12 @@ def _token_request(data: dict) -> dict:
     if res.status_code != 200:
         raise SpotifyError(f"token exchange failed ({res.status_code})")
     payload = res.json()
-    payload["expires_at"] = time.time() + int(payload.get("expires_in", 3600)) - 60
-    return payload
+    return {
+        "access_token": payload["access_token"],
+        "refresh_token": payload.get("refresh_token", ""),
+        # 60s of slack so a token cannot expire mid-export.
+        "expires_at": time.time() + int(payload.get("expires_in", 3600)) - 60,
+    }
 
 
 def exchange_code(code: str) -> dict:
@@ -95,7 +100,8 @@ def refresh(token: dict) -> dict:
         {"grant_type": "refresh_token", "refresh_token": refresh_token}
     )
     # Spotify does not always return a new refresh token; keep the old one.
-    fresh.setdefault("refresh_token", refresh_token)
+    if not fresh.get("refresh_token"):
+        fresh["refresh_token"] = refresh_token
     return fresh
 
 
@@ -107,6 +113,11 @@ def ensure_fresh(token: dict) -> dict:
 
 def _headers(token: dict) -> dict:
     return {"Authorization": f"Bearer {token['access_token']}"}
+
+
+def _scrub(value: str) -> str:
+    """Strip characters that break Spotify's field-scoped query syntax."""
+    return re.sub(r'["\\:]', " ", value).strip()
 
 
 def _artists_match(query_artist: str, found_artists: Iterable[str]) -> bool:
@@ -125,9 +136,12 @@ def search_track(http: httpx.Client, token: dict, title: str, artist: str) -> st
     artist on the result actually matches what we asked for, so a near-miss
     comes back as a miss rather than as a substitution.
     """
+    clean_title, clean_artist = _scrub(title), _scrub(artist)
+    if not clean_title:
+        return None
     attempts = [
-        (f'track:"{title}" artist:"{artist}"', False),
-        (f"{title} {artist}", True),
+        (f'track:"{clean_title}" artist:"{clean_artist}"', False),
+        (f"{clean_title} {clean_artist}", True),
     ]
     for query, verify_artist in attempts:
         res = http.get(
@@ -162,12 +176,16 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
 
         uris: list[str] = []
         missed: list[str] = []
+        duplicates: list[str] = []
         for track in tracks:
+            label = f"{track['title']} - {track['artist']}"
             uri = search_track(http, token, track["title"], track["artist"])
-            if uri and uri not in uris:
-                uris.append(uri)
+            if not uri:
+                missed.append(label)
+            elif uri in uris:
+                duplicates.append(label)
             else:
-                missed.append(f"{track['title']} - {track['artist']}")
+                uris.append(uri)
 
         created = http.post(
             f"{API}/users/{user_id}/playlists",
@@ -196,4 +214,5 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
         "added": len(uris),
         "requested": len(tracks),
         "missed": missed,
+        "duplicates": duplicates,
     }

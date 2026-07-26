@@ -40,15 +40,51 @@ server logs a note at startup, `/api/spotify/status` reports
 `configured: false`, and the frontend hides the export button. Nothing about
 playlist generation depends on it.
 
-To turn it on, create an app in the Spotify developer dashboard, add your
-redirect URI to it, and put the client ID and secret in `.env`. The flow is
-Authorization Code with scope `playlist-modify-private`.
+### Turning it on
+
+1. Go to https://developer.spotify.com/dashboard and create an app. Name and
+   description can be anything.
+2. Tick **Web API** when it asks which APIs you plan to use.
+3. Add this exact redirect URI and save:
+
+   ```
+   http://127.0.0.1:8000/api/spotify/callback
+   ```
+
+   Use the IP literal. Spotify rejects `localhost` in redirect URIs for
+   loopback addresses, and the error it gives at login is not obvious. If you
+   run the server on another port, change it here and in `SPOTIFY_REDIRECT_URI`
+   so the two match character for character.
+4. Copy the Client ID and Client Secret from the app's settings into `.env`.
+5. Restart `uvicorn`. The export button appears once the server sees the
+   client ID.
+
+A new app starts in development mode, which means only your own Spotify
+account can authorize it until you add other users to its allowlist. That is
+fine for running it yourself.
+
+The flow is Authorization Code with scope `playlist-modify-private`, so the
+playlists it creates are private to your account.
 
 Track matching is imperfect and the app says so. Each track is searched by
 title and artist; a loose fallback search is only accepted when the artist on
 the result actually matches. Anything still unmatched is reported by name
 ("Added 10 of 12. Couldn't find: ..."). No song is ever swapped in for one
 that could not be found.
+
+## Tests
+
+`tests/test_spotify_flow.py` runs the whole export against a stand-in for the
+Spotify Web API: the OAuth round trip, a forged `state`, the search fallback,
+and the report at the end. It needs no credentials and no network.
+
+```bash
+python -m tests.test_spotify_flow
+```
+
+It asserts the thing most worth protecting: when the loose fallback search
+returns a track by the wrong artist, that track is reported as a miss and
+never reaches the playlist.
 
 ## Adding presets
 
@@ -88,6 +124,8 @@ static/
   index.html
   styles.css   hand-written, no framework
   app.js       presets config, fetch, render
+tests/
+  test_spotify_flow.py
 ```
 
 ## Notes

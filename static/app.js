@@ -317,6 +317,15 @@ function reportExport(result) {
     );
   }
 
+  const dupes = result.duplicates || [];
+  if (dupes.length) {
+    nodes.push(
+      document.createTextNode(
+        `Skipped as already in the list: ${dupes.join(', ')}. `
+      )
+    );
+  }
+
   if (result.url) {
     const link = document.createElement('a');
     link.href = result.url;
@@ -408,6 +417,14 @@ async function initSpotify() {
       showExportNote([document.createTextNode(REDIRECT_MESSAGES[outcome])]);
     }
     window.history.replaceState({}, '', window.location.pathname);
+
+    // The user already asked for this before being sent to Spotify. Finish it
+    // rather than making them find the button again.
+    if (outcome === 'connected' && saved && state.spotify.connected) {
+      paintSpotifyButton();
+      exportToSpotify();
+      return;
+    }
   }
 
   paintSpotifyButton();
