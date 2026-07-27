@@ -213,9 +213,14 @@ def require_spotify() -> None:
 
 @app.get("/api/spotify/status")
 def spotify_status(request: Request) -> dict:
+    token = request.session.get("spotify_token") or {}
     return {
         "configured": spotify.is_configured(),
-        "connected": bool(request.session.get("spotify_token")),
+        "connected": bool(token),
+        # What the connection can actually do, so a scope problem is visible
+        # rather than showing up later as a 403.
+        "granted_scope": token.get("scope", ""),
+        "missing_scopes": spotify.missing_scopes(token) if token else [],
     }
 
 
@@ -236,9 +241,19 @@ def spotify_callback(request: Request, code: str = "", state: str = "", error: s
     if not code or not state or state != expected:
         return RedirectResponse("/?spotify=badstate")
     try:
-        request.session["spotify_token"] = spotify.exchange_code(code)
-    except spotify.SpotifyError:
+        token = spotify.exchange_code(code)
+    except spotify.SpotifyError as exc:
+        log.warning("Spotify token exchange failed: %s", exc)
         return RedirectResponse("/?spotify=failed")
+
+    request.session["spotify_token"] = token
+    lacking = spotify.missing_scopes(token)
+    log.info("Spotify connected. Granted scope: %r", token.get("scope", ""))
+    if lacking:
+        log.warning(
+            "Spotify did not grant %s. Creating a playlist will fail with 403.",
+            ", ".join(lacking),
+        )
     return RedirectResponse("/?spotify=connected")
 
 
@@ -261,7 +276,7 @@ def spotify_create(request: Request, req: ExportRequest) -> dict:
     except spotify.SpotifyError as exc:
         # An expired refresh token is the common case; make them reconnect.
         request.session.pop("spotify_token", None)
-        raise HTTPException(status_code=502, detail=f"Spotify: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 # Mounted last so /api/* and / are matched first.

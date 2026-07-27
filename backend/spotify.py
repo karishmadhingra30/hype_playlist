@@ -15,13 +15,26 @@ import httpx
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 API = "https://api.spotify.com/v1"
-SCOPE = "playlist-modify-private"
+SCOPES = ["playlist-modify-private", "playlist-modify-public"]
+SCOPE = " ".join(SCOPES)
 
 TIMEOUT = httpx.Timeout(15.0)
 
 
 class SpotifyError(RuntimeError):
     pass
+
+
+def _detail(res: httpx.Response) -> str:
+    """Spotify puts a readable reason in the body. Use it."""
+    try:
+        body = res.json()
+    except ValueError:
+        return res.text[:200].strip() or "no detail"
+    error = body.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error)
+    return str(error or body)[:200]
 
 
 def client_id() -> str | None:
@@ -55,7 +68,7 @@ def authorize_url(state: str) -> str:
             "redirect_uri": redirect_uri(),
             "scope": SCOPE,
             "state": state,
-            "show_dialog": "false",
+            "show_dialog": "true",
         }
     )
     return f"{AUTH_URL}?{params}"
@@ -72,11 +85,14 @@ def _token_request(data: dict) -> dict:
             },
         )
     if res.status_code != 200:
-        raise SpotifyError(f"token exchange failed ({res.status_code})")
+        raise SpotifyError(f"token exchange failed ({res.status_code}): {_detail(res)}")
     payload = res.json()
     return {
         "access_token": payload["access_token"],
         "refresh_token": payload.get("refresh_token", ""),
+        # What Spotify actually granted, which is not always what was asked
+        # for. Dropping this field is what made a 403 hard to diagnose.
+        "scope": payload.get("scope", ""),
         # 60s of slack so a token cannot expire mid-export.
         "expires_at": time.time() + int(payload.get("expires_in", 3600)) - 60,
     }
@@ -109,6 +125,12 @@ def ensure_fresh(token: dict) -> dict:
     if token.get("expires_at", 0) > time.time():
         return token
     return refresh(token)
+
+
+def missing_scopes(token: dict) -> list[str]:
+    """Scopes we asked for that this token was not actually granted."""
+    granted = set((token.get("scope") or "").split())
+    return [s for s in SCOPES if s not in granted]
 
 
 def _headers(token: dict) -> dict:
@@ -171,7 +193,9 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
     with httpx.Client(timeout=TIMEOUT) as http:
         me = http.get(f"{API}/me", headers=_headers(token))
         if me.status_code != 200:
-            raise SpotifyError(f"could not read the Spotify profile ({me.status_code})")
+            raise SpotifyError(
+                f"could not read the Spotify profile ({me.status_code}): {_detail(me)}"
+            )
         user_id = me.json()["id"]
 
         uris: list[str] = []
@@ -196,8 +220,18 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
             },
             headers=_headers(token),
         )
+        if created.status_code == 403:
+            lacking = missing_scopes(token) or ["playlist-modify-private"]
+            raise SpotifyError(
+                f"Spotify refused to create the playlist. It says: "
+                f"{_detail(created)}. This connection is missing "
+                f"{', '.join(lacking)}. Connect again to re-approve."
+            )
         if created.status_code not in (200, 201):
-            raise SpotifyError(f"could not create the playlist ({created.status_code})")
+            raise SpotifyError(
+                f"could not create the playlist ({created.status_code}): "
+                f"{_detail(created)}"
+            )
         playlist = created.json()
 
         if uris:
@@ -207,7 +241,9 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
                 headers=_headers(token),
             )
             if added.status_code not in (200, 201):
-                raise SpotifyError(f"could not add tracks ({added.status_code})")
+                raise SpotifyError(
+                    f"could not add tracks ({added.status_code}): {_detail(added)}"
+                )
 
     return {
         "url": playlist.get("external_urls", {}).get("spotify", ""),

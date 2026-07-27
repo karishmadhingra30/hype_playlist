@@ -42,7 +42,7 @@ async def token(request: Request):
         "access_token": "tok_" + form.get("grant_type", "?"),
         "refresh_token": "refresh_abc",
         "token_type": "Bearer",
-        "scope": "playlist-modify-private",
+        "scope": BEHAVIOUR["granted_scope"],
         "expires_in": 3600,
     }
 
@@ -66,6 +66,13 @@ LOOSE_WRONG = {"Seventeen Sharon Van Etten": ("Some Cover Band", "spotify:track:
 
 RECEIVED: dict = {"uris": [], "playlist": None}
 
+# Switches so one mock can play both a healthy account and the stale-grant
+# case that produced a 403 in the wild.
+BEHAVIOUR: dict = {
+    "granted_scope": "playlist-modify-private playlist-modify-public",
+    "create_status": 201,
+}
+
 
 @mock.get("/v1/search")
 def search(q: str, type: str = "track", limit: int = 1):
@@ -79,6 +86,11 @@ def search(q: str, type: str = "track", limit: int = 1):
 
 @mock.post("/v1/users/{user_id}/playlists")
 async def create(user_id: str, request: Request):
+    if BEHAVIOUR["create_status"] == 403:
+        return JSONResponse(
+            {"error": {"status": 403, "message": "Insufficient client scope"}},
+            status_code=403,
+        )
     RECEIVED["playlist"] = await request.json()
     return JSONResponse(
         {
@@ -140,7 +152,7 @@ def main() -> None:
     # A real cookie jar, because the token lives in the session cookie.
     with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
         status = client.get("/api/spotify/status").json()
-        assert status == {"configured": True, "connected": False}, status
+        assert status["configured"] is True and status["connected"] is False, status
 
         # Forged state must be refused before any token exchange.
         client.get("/api/spotify/login")
@@ -152,7 +164,12 @@ def main() -> None:
         # The real round trip.
         landed = client.get("/api/spotify/login")
         assert landed.url.params.get("spotify") == "connected", landed.url
-        assert client.get("/api/spotify/status").json()["connected"] is True
+
+        status = client.get("/api/spotify/status").json()
+        assert status["connected"] is True, status
+        # The granted scope must be visible, since it is what a 403 turns on.
+        assert status["granted_scope"] == BEHAVIOUR["granted_scope"], status
+        assert status["missing_scopes"] == [], status
 
         result = client.post(
             "/api/spotify/create",
@@ -176,6 +193,34 @@ def main() -> None:
     assert RECEIVED["uris"] == ["spotify:track:aaa", "spotify:track:bbb"], RECEIVED
     assert RECEIVED["playlist"]["public"] is False, RECEIVED["playlist"]
 
+    print("[ ok ] happy path: OAuth, scope reported, export, honest reporting")
+
+    # The failure seen in the wild: a grant that predates the write scope.
+    # Spotify returns a valid token, reads succeed, and only the write 403s.
+    BEHAVIOUR["granted_scope"] = "playlist-modify-private"
+    BEHAVIOUR["create_status"] = 403
+
+    with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
+        client.get("/api/spotify/login")
+        status = client.get("/api/spotify/status").json()
+        assert status["missing_scopes"] == ["playlist-modify-public"], status
+
+        refused = client.post(
+            "/api/spotify/create",
+            json={"playlist_name": "x", "vibe_note": "", "tracks": TRACKS},
+        )
+        assert refused.status_code == 502, refused.status_code
+        message = refused.json()["detail"]
+
+    # The message has to name the cause and the fix, not just the number.
+    assert message.startswith("Spotify refused"), message
+    assert "Insufficient client scope" in message, message
+    assert "playlist-modify-public" in message, message
+    assert "Connect again" in message, message
+    print("[ ok ] a 403 explains the missing scope and what to do about it")
+    print("       message:", message)
+
+    print()
     print("added        ", body["added"], "of", body["requested"])
     print("missed       ", body["missed"])
     print("duplicates   ", body["duplicates"])

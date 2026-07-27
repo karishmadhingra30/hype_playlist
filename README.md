@@ -75,8 +75,16 @@ A new app starts in development mode, which means only your own Spotify
 account can authorize it until you add other users to its allowlist. That is
 fine for running it yourself.
 
-The flow is Authorization Code with scope `playlist-modify-private`, so the
-playlists it creates are private to your account.
+The flow is Authorization Code. It asks for `playlist-modify-private` and
+`playlist-modify-public`, and creates every playlist private. Spotify treats
+creating a playlist as a write whichever way it is flagged, so asking for only
+the private scope gets a 403 on creation.
+
+If you authorized the app before and later changed scopes, Spotify may reuse
+the old grant and hand back a token that can read but not write. Reads succeed
+and only creation fails, with a 403. The app asks for consent explicitly on
+every login to avoid that, and `/api/spotify/status` reports the granted scope
+so you can see it rather than guess.
 
 Track matching is imperfect and the app says so. Each track is searched by
 title and artist; a loose fallback search is only accepted when the artist on
