@@ -71,9 +71,15 @@ the exact redirect string to compare against the dashboard. Most Spotify
 setup failures are a mismatched string rather than broken code, and the
 browser error does not tell you which string.
 
-A new app starts in development mode, which means only your own Spotify
-account can authorize it until you add other users to its allowlist. That is
-fine for running it yourself.
+A new app starts in development mode. In that mode Spotify only serves
+accounts listed on the app, and the owner is not always on that list
+automatically. Go to the app's **Settings, then User Management**, and add
+your own Spotify account with the name and email on it.
+
+Skipping this produces a confusing failure rather than a login error. Reads
+keep working, because `/v1/me` and `/v1/search` need no user permission at
+all, so the connection looks healthy and only creating the playlist returns
+403 Forbidden.
 
 The flow is Authorization Code. It asks for `playlist-modify-private` and
 `playlist-modify-public`, and creates every playlist private. Spotify treats

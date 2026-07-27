@@ -5,6 +5,7 @@ returns False and main.py never routes anything here.
 """
 
 import base64
+import logging
 import os
 import re
 import time
@@ -19,6 +20,21 @@ SCOPES = ["playlist-modify-private", "playlist-modify-public"]
 SCOPE = " ".join(SCOPES)
 
 TIMEOUT = httpx.Timeout(15.0)
+
+log = logging.getLogger("hype.spotify")
+
+
+def log_refusal(res: httpx.Response, token: dict, note: str = "") -> None:
+    """Record everything Spotify said, so a refusal never has to be guessed."""
+    log.warning(
+        "Spotify %s %s -> %s%s\n  body: %s\n  granted scope: %r",
+        res.request.method,
+        res.request.url,
+        res.status_code,
+        f" ({note})" if note else "",
+        res.text[:800] or "<empty>",
+        token.get("scope", "<not stored>"),
+    )
 
 
 class SpotifyError(RuntimeError):
@@ -193,10 +209,12 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
     with httpx.Client(timeout=TIMEOUT) as http:
         me = http.get(f"{API}/me", headers=_headers(token))
         if me.status_code != 200:
+            log_refusal(me, token, "reading the profile")
             raise SpotifyError(
                 f"could not read the Spotify profile ({me.status_code}): {_detail(me)}"
             )
-        user_id = me.json()["id"]
+        profile = me.json()
+        user_id = profile["id"]
 
         uris: list[str] = []
         missed: list[str] = []
@@ -221,13 +239,26 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
             headers=_headers(token),
         )
         if created.status_code == 403:
-            lacking = missing_scopes(token) or ["playlist-modify-private"]
+            log_refusal(created, token, "creating the playlist")
+            log.warning("  profile: %s", profile)
+            lacking = missing_scopes(token)
+            if lacking:
+                raise SpotifyError(
+                    f"Spotify refused to create the playlist: {_detail(created)}. "
+                    f"This connection is missing {', '.join(lacking)}. "
+                    f"Connect again to re-approve."
+                )
             raise SpotifyError(
-                f"Spotify refused to create the playlist. It says: "
-                f"{_detail(created)}. This connection is missing "
-                f"{', '.join(lacking)}. Connect again to re-approve."
+                f"Spotify refused to create the playlist: {_detail(created)}. "
+                f"The login granted everything it needs "
+                f"({token.get('scope') or 'no scope reported'}), so this is not "
+                f"about the connection. While an app is in development mode "
+                f"Spotify only allows accounts listed on it, and reads succeed "
+                f"for everyone while writes do not. Add your Spotify account "
+                f"under User Management in the app's dashboard settings."
             )
         if created.status_code not in (200, 201):
+            log_refusal(created, token, "creating the playlist")
             raise SpotifyError(
                 f"could not create the playlist ({created.status_code}): "
                 f"{_detail(created)}"
@@ -241,6 +272,7 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
                 headers=_headers(token),
             )
             if added.status_code not in (200, 201):
+                log_refusal(added, token, "adding tracks")
                 raise SpotifyError(
                     f"could not add tracks ({added.status_code}): {_detail(added)}"
                 )

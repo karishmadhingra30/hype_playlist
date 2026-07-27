@@ -71,6 +71,7 @@ RECEIVED: dict = {"uris": [], "playlist": None}
 BEHAVIOUR: dict = {
     "granted_scope": "playlist-modify-private playlist-modify-public",
     "create_status": 201,
+    "create_message": "Insufficient client scope",
 }
 
 
@@ -88,7 +89,7 @@ def search(q: str, type: str = "track", limit: int = 1):
 async def create(user_id: str, request: Request):
     if BEHAVIOUR["create_status"] == 403:
         return JSONResponse(
-            {"error": {"status": 403, "message": "Insufficient client scope"}},
+            {"error": {"status": 403, "message": BEHAVIOUR["create_message"]}},
             status_code=403,
         )
     RECEIVED["playlist"] = await request.json()
@@ -217,8 +218,29 @@ def main() -> None:
     assert "Insufficient client scope" in message, message
     assert "playlist-modify-public" in message, message
     assert "Connect again" in message, message
-    print("[ ok ] a 403 explains the missing scope and what to do about it")
-    print("       message:", message)
+    print("[ ok ] a 403 with a real scope gap names the missing scope")
+
+    # The second 403: every scope granted, Spotify still refuses with a bare
+    # "Forbidden". An earlier version invented a missing scope here, which sent
+    # the debugging in the wrong direction. It must not claim that again.
+    BEHAVIOUR["granted_scope"] = "playlist-modify-private playlist-modify-public"
+    BEHAVIOUR["create_message"] = "Forbidden"
+
+    with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
+        client.get("/api/spotify/login")
+        assert client.get("/api/spotify/status").json()["missing_scopes"] == []
+        refused = client.post(
+            "/api/spotify/create",
+            json={"playlist_name": "x", "vibe_note": "", "tracks": TRACKS},
+        )
+        assert refused.status_code == 502, refused.status_code
+        second = refused.json()["detail"]
+
+    assert "missing" not in second.lower(), second
+    assert "development mode" in second, second
+    assert "User Management" in second, second
+    print("[ ok ] a 403 with every scope granted blames the right thing")
+    print("       message:", second)
 
     print()
     print("added        ", body["added"], "of", body["requested"])
