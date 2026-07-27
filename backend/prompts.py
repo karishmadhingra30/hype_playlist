@@ -57,6 +57,32 @@ markdown fences, no commentary.
 
 TRACK_COUNTS = {"short": 6, "medium": 12, "long": 20}
 
+# Asking nicely for a shape is not the same as getting it. Passed as
+# output_config.format so the API rejects a response missing "tracks",
+# which is exactly how this failed in the wild.
+PLAYLIST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "playlist_name": {"type": "string"},
+        "vibe_note": {"type": "string"},
+        "tracks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "artist": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["title", "artist", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["playlist_name", "vibe_note", "tracks"],
+    "additionalProperties": False,
+}
+
 VIBE_BANDS = [
     (
         15,

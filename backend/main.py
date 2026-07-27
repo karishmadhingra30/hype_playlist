@@ -21,7 +21,12 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import spotify
-from .prompts import SYSTEM_PROMPT, TRACK_COUNTS, build_user_prompt
+from .prompts import (
+    PLAYLIST_SCHEMA,
+    SYSTEM_PROMPT,
+    TRACK_COUNTS,
+    build_user_prompt,
+)
 
 load_dotenv()
 
@@ -30,6 +35,10 @@ logging.basicConfig(level=logging.INFO)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 MODEL = "claude-opus-5"
+
+# One retry. A response that parses but carries no tracks is recoverable,
+# and it is cheaper to ask again than to hand the user a dead button.
+MAX_ATTEMPTS = 2
 
 app = FastAPI(title="Hype Playlist", docs_url=None, redoc_url=None)
 app.add_middleware(
@@ -120,6 +129,22 @@ def clean_payload(data: dict, wanted: int) -> dict:
     }
 
 
+def describe_failure(attempt: int, response, raw: str, reason: str) -> None:
+    """Log enough to tell a truncation apart from a well-formed wrong answer."""
+    usage = getattr(response, "usage", None)
+    log.warning(
+        "playlist attempt %s/%s failed: %s | stop_reason=%s | "
+        "output_tokens=%s | chars=%s",
+        attempt,
+        MAX_ATTEMPTS,
+        reason,
+        getattr(response, "stop_reason", "?"),
+        getattr(usage, "output_tokens", "?"),
+        len(raw),
+    )
+    log.warning("full response text: %s", raw or "<empty>")
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -128,35 +153,54 @@ def index() -> FileResponse:
 @app.post("/api/playlist")
 def create_playlist(req: PlaylistRequest) -> dict:
     client = get_client()
-    try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=16000,
-            output_config={"effort": "medium"},
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": build_user_prompt(req.situation, req.length, req.vibe),
-                }
-            ],
-        )
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=503, detail="Anthropic rejected the API key.")
-    except anthropic.RateLimitError:
-        raise HTTPException(status_code=429, detail="Rate limited. Try again shortly.")
-    except anthropic.APIError as exc:
-        raise HTTPException(status_code=502, detail=f"Anthropic call failed: {exc}")
+    wanted = TRACK_COUNTS[req.length]
+    prompt = build_user_prompt(req.situation, req.length, req.vibe)
 
-    raw = "".join(b.text for b in response.content if b.type == "text")
-    try:
-        return clean_payload(extract_json(raw), TRACK_COUNTS[req.length])
-    except (ValueError, json.JSONDecodeError):
-        log.warning("unparseable playlist response: %s", raw[:400])
-        raise HTTPException(
-            status_code=502,
-            detail="Claude returned something that was not a playlist. Try again.",
-        )
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=16000,
+                output_config={
+                    "effort": "high",
+                    "format": {"type": "json_schema", "schema": PLAYLIST_SCHEMA},
+                },
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.AuthenticationError:
+            raise HTTPException(status_code=503, detail="Anthropic rejected the API key.")
+        except anthropic.RateLimitError:
+            raise HTTPException(status_code=429, detail="Rate limited. Try again shortly.")
+        except anthropic.APIError as exc:
+            raise HTTPException(status_code=502, detail=f"Anthropic call failed: {exc}")
+
+        raw = "".join(b.text for b in response.content if b.type == "text")
+
+        try:
+            data = clean_payload(extract_json(raw), wanted)
+        except (ValueError, json.JSONDecodeError) as exc:
+            describe_failure(attempt, response, raw, str(exc))
+            continue
+
+        # A handful of tracks when twenty were asked for is a bad playlist,
+        # not a good short one. Worth one more try.
+        if len(data["tracks"]) * 2 < wanted and attempt < MAX_ATTEMPTS:
+            describe_failure(
+                attempt, response, raw,
+                f"only {len(data['tracks'])} of {wanted} tracks",
+            )
+            continue
+
+        if len(data["tracks"]) < wanted:
+            log.info("returning %s tracks, %s were asked for",
+                     len(data["tracks"]), wanted)
+        return data
+
+    raise HTTPException(
+        status_code=502,
+        detail="Claude returned something that was not a playlist. Try again.",
+    )
 
 
 # ---------- Spotify (optional) ----------

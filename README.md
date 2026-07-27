@@ -91,12 +91,18 @@ Spotify Web API: the OAuth round trip, a forged `state`, the search fallback,
 and the report at the end. It needs no credentials and no network.
 
 ```bash
-python -m tests.test_spotify_flow
+python -m tests.test_playlist        # parsing, retry, trimming
+python -m tests.test_spotify_flow    # OAuth and export
 ```
 
-It asserts the thing most worth protecting: when the loose fallback search
-returns a track by the wrong artist, that track is reported as a miss and
-never reaches the playlist.
+`test_spotify_flow.py` asserts the thing most worth protecting: when the loose
+fallback search returns a track by the wrong artist, that track is reported as
+a miss and never reaches the playlist.
+
+`test_playlist.py` covers a failure seen in the wild. Claude returned valid
+JSON with `playlist_name` and `vibe_note` and no `tracks` key, and the request
+502'd. The schema is now enforced by the API through `output_config.format`,
+and one retry covers the rest.
 
 ## Adding presets
 
@@ -139,6 +145,7 @@ static/
 scripts/
   check_spotify.py   preflight for the Spotify config
 tests/
+  test_playlist.py
   test_spotify_flow.py
 ```
 
