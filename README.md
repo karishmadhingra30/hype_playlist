@@ -71,21 +71,13 @@ the exact redirect string to compare against the dashboard. Most Spotify
 setup failures are a mismatched string rather than broken code, and the
 browser error does not tell you which string.
 
-A new app starts in development mode. In that mode Spotify only serves
-accounts listed on the app, and the owner is not always on that list
-automatically. Go to the app's **Settings, then User Management**, and add
-your own Spotify account with the name and email on it.
+A new app starts in development mode, where Spotify serves only the accounts
+listed under **Settings, then User Management**. Add your own Spotify account
+there if it is not already listed.
 
-Skipping this produces a confusing failure rather than a login error. Reads
-keep working, because `/v1/me` and `/v1/search` need no user permission at
-all, so the connection looks healthy and only creating the playlist returns
-403 Forbidden.
-
-Spotify matches that list on email, against the account that authorized in the
-browser. Those are easy to get out of step if you have more than one Spotify
-login. Once connected, the app shows **Connected as** and the account's email
-under the export button, so you can compare it against the dashboard without
-guessing. Reading that email is why `user-read-email` is in the scope list.
+Once connected, the app shows **Connected as** and the account's email under
+the export button, so you can see which account it will write to. Reading that
+email is why `user-read-email` is in the scope list.
 
 The flow is Authorization Code. It asks for `playlist-modify-private` and
 `playlist-modify-public`, and creates every playlist private. Spotify treats
@@ -154,6 +146,24 @@ const PRESETS = [
 `label` is what shows on the card. `prompt` is what Claude actually receives,
 so it can be longer and more specific than the label. Add an object and it
 appears; the grid and the numbering handle themselves.
+
+## A note on Spotify's February 2026 migration
+
+Two endpoints this app depends on were replaced in that migration:
+
+| Retired | Current |
+| --- | --- |
+| `POST /v1/users/{user_id}/playlists` | `POST /v1/me/playlists` |
+| `POST /v1/playlists/{id}/tracks` | `POST /v1/playlists/{id}/items` |
+
+The retired forms do not return a helpful error. They answer a perfectly valid
+token with a bare `403 Forbidden`, which reads exactly like a permissions
+problem and is not one. Reads keep working throughout, because `/v1/me` and
+`/v1/search` need no user permission, so the connection looks healthy and only
+the write fails.
+
+`tests/test_spotify_flow.py` mounts both retired endpoints on its stand-in and
+fails if any code path touches them.
 
 ## Endpoints
 

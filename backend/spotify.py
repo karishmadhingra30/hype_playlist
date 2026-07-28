@@ -225,12 +225,10 @@ PROBE_NAME = "Hype Playlist connection probe"
 
 
 def probe(token: dict) -> dict:
-    """Try several ways of creating a playlist and report what each one does.
+    """Check what the connected account is actually allowed to do.
 
-    Three rounds of reasoning about a bare 403 produced three wrong answers.
-    This settles it by experiment: if every variant fails the account or the
-    app is the problem, and if one succeeds the request body or the endpoint
-    was the problem.
+    Only current endpoints. The retired /users/{id}/playlists form is not
+    tried, because a 403 from it says nothing about the account.
     """
     report: dict = {"attempts": [], "cleaned_up": []}
 
@@ -241,38 +239,30 @@ def probe(token: dict) -> dict:
             report["profile_body"] = me.text[:400]
             return report
 
-        profile = me.json()
-        uid = profile["id"]
-        report["account"] = identify(profile)
+        report["account"] = identify(me.json())
         report["granted_scope"] = token.get("scope", "")
 
-        # Can it read the library at all?
         listing = http.get(
             f"{API}/me/playlists", params={"limit": 1}, headers=_headers(token)
         )
         report["read_own_playlists"] = listing.status_code
 
         attempts = [
-            ("POST /v1/users/{id}/playlists  name only",
-             f"{API}/users/{uid}/playlists", {"name": PROBE_NAME}),
-            ("POST /v1/users/{id}/playlists  public true",
-             f"{API}/users/{uid}/playlists", {"name": PROBE_NAME, "public": True}),
-            ("POST /v1/users/{id}/playlists  public false",
-             f"{API}/users/{uid}/playlists", {"name": PROBE_NAME, "public": False}),
-            ("POST /v1/users/{id}/playlists  with description",
-             f"{API}/users/{uid}/playlists",
+            ("POST /v1/me/playlists  name only", {"name": PROBE_NAME}),
+            ("POST /v1/me/playlists  public false",
+             {"name": PROBE_NAME, "public": False}),
+            ("POST /v1/me/playlists  with description",
              {"name": PROBE_NAME, "public": False, "description": "probe"}),
-            ("POST /v1/me/playlists  name only",
-             f"{API}/me/playlists", {"name": PROBE_NAME}),
         ]
 
-        for label, url, body in attempts:
-            res = http.post(url, json=body, headers=_headers(token))
+        for label, body in attempts:
+            res = http.post(
+                f"{API}/me/playlists", json=body, headers=_headers(token)
+            )
             entry = {"attempt": label, "status": res.status_code}
             if res.status_code in (200, 201):
                 created = res.json()
                 entry["created_id"] = created.get("id")
-                # Unfollowing is how a playlist is removed from a library.
                 gone = http.delete(
                     f"{API}/playlists/{created.get('id')}/followers",
                     headers=_headers(token),
@@ -298,11 +288,9 @@ def verdict(report: dict) -> str:
         )
     if codes == {403}:
         return (
-            "Every way of creating a playlist returns 403 while reads succeed. "
-            "Nothing in the request body explains that, so the block is on the "
-            "Spotify app or the account, not on this code. Check that the app "
-            "has Web API enabled in the dashboard, and that this exact account "
-            "is on its user list."
+            "Every create on /v1/me/playlists returns 403 while reads succeed. "
+            "The endpoint is current and the body is minimal, so the block is "
+            "on the Spotify app or the account rather than on this code."
         )
     return f"Mixed results across attempts: {sorted(codes)}."
 
@@ -313,15 +301,6 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
     Returns the playlist URL, the number added, and the titles that missed.
     """
     with httpx.Client(timeout=TIMEOUT) as http:
-        me = http.get(f"{API}/me", headers=_headers(token))
-        if me.status_code != 200:
-            log_refusal(me, token, "reading the profile")
-            raise SpotifyError(
-                f"could not read the Spotify profile ({me.status_code}): {_detail(me)}"
-            )
-        profile = me.json()
-        user_id = profile["id"]
-
         uris: list[str] = []
         missed: list[str] = []
         duplicates: list[str] = []
@@ -335,8 +314,10 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
             else:
                 uris.append(uri)
 
+        # /me/playlists, not /users/{id}/playlists. The latter was retired in
+        # February 2026 and answers a valid token with a bare 403.
         created = http.post(
-            f"{API}/users/{user_id}/playlists",
+            f"{API}/me/playlists",
             json={
                 "name": name[:100],
                 "public": False,
@@ -346,7 +327,6 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
         )
         if created.status_code == 403:
             log_refusal(created, token, "creating the playlist")
-            log.warning("  profile: %s", profile)
             lacking = missing_scopes(token)
             if lacking:
                 raise SpotifyError(
@@ -356,13 +336,9 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
                 )
             raise SpotifyError(
                 f"Spotify refused to create the playlist: {_detail(created)}. "
-                f"The login granted every scope it needs, so this is not about "
-                f"permissions. You are connected as {identify(profile)}. While "
-                f"the app is in development mode Spotify only allows accounts "
-                f"listed under User Management, matched on email. If the "
-                f"address listed there is not this one, that is the mismatch. "
-                f"Log out of Spotify in your browser and connect again as the "
-                f"listed account, or add this one."
+                f"Every scope it needs was granted, so this is not about "
+                f"permissions. Open /api/spotify/probe to see which calls the "
+                f"account is allowed to make."
             )
         if created.status_code not in (200, 201):
             log_refusal(created, token, "creating the playlist")
@@ -373,8 +349,9 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
         playlist = created.json()
 
         if uris:
+            # /items, not /tracks. Same February 2026 migration.
             added = http.post(
-                f"{API}/playlists/{playlist['id']}/tracks",
+                f"{API}/playlists/{playlist['id']}/items",
                 json={"uris": uris},
                 headers=_headers(token),
             )

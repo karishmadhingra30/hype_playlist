@@ -91,8 +91,30 @@ def search(q: str, type: str = "track", limit: int = 1):
                                   "artists": [{"name": artist}]}]}}
 
 
+RETIRED = {"error": {"status": 403, "message": "Forbidden"}}
+
+
 @mock.post("/v1/users/{user_id}/playlists")
-async def create(user_id: str, request: Request):
+def retired_create(user_id: str):
+    """Retired in February 2026. Answers a perfectly valid token with a 403."""
+    RECEIVED.setdefault("retired_calls", []).append("POST /v1/users/{id}/playlists")
+    return JSONResponse(RETIRED, status_code=403)
+
+
+@mock.post("/v1/playlists/{pid}/tracks")
+def retired_add(pid: str):
+    """Retired in the same migration, replaced by /items."""
+    RECEIVED.setdefault("retired_calls", []).append("POST /v1/playlists/{id}/tracks")
+    return JSONResponse(RETIRED, status_code=403)
+
+
+@mock.get("/v1/me/playlists")
+def my_playlists(limit: int = 1):
+    return {"items": [], "total": 0}
+
+
+@mock.post("/v1/me/playlists")
+async def create(request: Request):
     if BEHAVIOUR["create_status"] == 403:
         return JSONResponse(
             {"error": {"status": 403, "message": BEHAVIOUR["create_message"]}},
@@ -108,23 +130,13 @@ async def create(user_id: str, request: Request):
     )
 
 
-@mock.get("/v1/me/playlists")
-def my_playlists(limit: int = 1):
-    return {"items": [], "total": 0}
-
-
-@mock.post("/v1/me/playlists")
-async def create_for_me(request: Request):
-    return await create("tester", request)
-
-
 @mock.delete("/v1/playlists/{pid}/followers")
 def unfollow(pid: str):
     RECEIVED.setdefault("unfollowed", []).append(pid)
     return JSONResponse({}, status_code=200)
 
 
-@mock.post("/v1/playlists/{pid}/tracks")
+@mock.post("/v1/playlists/{pid}/items")
 async def add(pid: str, request: Request):
     RECEIVED["uris"].extend((await request.json())["uris"])
     return JSONResponse({"snapshot_id": "snap"}, status_code=201)
@@ -262,13 +274,11 @@ def main() -> None:
         assert refused.status_code == 502, refused.status_code
         second = refused.json()["detail"]
 
+    # It must not name a missing scope when none is missing, and must not
+    # invent an account or dashboard story. Point at the probe instead.
     assert "missing" not in second.lower(), second
-    assert "development mode" in second, second
-    assert "User Management" in second, second
-    # Naming the account is the whole point: an allowlisted address does not
-    # help if the browser authorized a different Spotify account.
-    assert "listed@example.com" in second, second
-    print("[ ok ] a 403 with every scope granted names the connected account")
+    assert "probe" in second, second
+    print("[ ok ] a 403 with every scope granted says so and points at the probe")
 
     # The probe has to reach a verdict, and must not leave test playlists
     # behind when a create does succeed.
@@ -276,9 +286,9 @@ def main() -> None:
     with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
         client.get("/api/spotify/login")
         blocked = client.get("/api/spotify/probe").json()
-    assert len(blocked["attempts"]) == 5, blocked
+    assert len(blocked["attempts"]) == 3, blocked
     assert {a["status"] for a in blocked["attempts"]} == {403}, blocked
-    assert "not on this code" in blocked["verdict"], blocked["verdict"]
+    assert "rather than on this code" in blocked["verdict"], blocked["verdict"]
     print("[ ok ] probe: every create refused, verdict points away from the code")
 
     BEHAVIOUR["create_status"] = 201
@@ -288,7 +298,7 @@ def main() -> None:
         allowed = client.get("/api/spotify/probe").json()
     assert {a["status"] for a in allowed["attempts"]} == {201}, allowed
     assert "works" in allowed["verdict"], allowed["verdict"]
-    assert len(RECEIVED["unfollowed"]) == 5, RECEIVED["unfollowed"]
+    assert len(RECEIVED["unfollowed"]) == 3, RECEIVED["unfollowed"]
     print("[ ok ] probe: successes are reported and cleaned up after")
 
     print()
@@ -297,6 +307,12 @@ def main() -> None:
     print("duplicates   ", body["duplicates"])
     print("uris exported", RECEIVED["uris"])
     print("private      ", RECEIVED["playlist"]["public"] is False)
+    # The retired endpoints are mounted and return 403. Touching either one
+    # would have produced exactly the failure this project spent four rounds
+    # misdiagnosing, so nothing may call them.
+    assert RECEIVED.get("retired_calls", []) == [], RECEIVED["retired_calls"]
+    print("[ ok ] no call reached a retired February 2026 endpoint")
+
     print("\nall assertions passed")
 
 
