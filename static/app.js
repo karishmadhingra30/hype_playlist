@@ -62,6 +62,7 @@ const el = {
   tracks: $('tracks'),
   spotify: $('spotify'),
   exportNote: $('export-note'),
+  whoami: $('whoami'),
 };
 
 const state = {
@@ -295,6 +296,13 @@ function paintSpotifyButton() {
   el.spotify.textContent = state.spotify.connected
     ? 'Send to Spotify'
     : 'Connect Spotify';
+
+  // Which account this will write to. Worth saying out loud, because a
+  // Spotify app in development mode only serves the accounts listed on it.
+  const account = state.spotify.account || {};
+  const who = account.email || account.display_name;
+  el.whoami.hidden = !(show && state.spotify.connected && who);
+  el.whoami.textContent = who ? `Connected as ${who}` : '';
 }
 
 function showExportNote(nodes) {

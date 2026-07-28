@@ -16,7 +16,11 @@ import httpx
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 API = "https://api.spotify.com/v1"
-SCOPES = ["playlist-modify-private", "playlist-modify-public"]
+SCOPES = [
+    "playlist-modify-private",
+    "playlist-modify-public",
+    "user-read-email",
+]
 SCOPE = " ".join(SCOPES)
 
 TIMEOUT = httpx.Timeout(15.0)
@@ -143,6 +147,22 @@ def ensure_fresh(token: dict) -> dict:
     return refresh(token)
 
 
+def identify(profile: dict) -> str:
+    """Name the account that actually authorized, as the dashboard sees it."""
+    email = profile.get("email")
+    name = profile.get("display_name") or profile.get("id", "unknown")
+    return f"{email} ({name})" if email else f"{name}, email not readable"
+
+
+def fetch_profile(token: dict) -> dict:
+    with httpx.Client(timeout=TIMEOUT) as http:
+        res = http.get(f"{API}/me", headers=_headers(token))
+    if res.status_code != 200:
+        log_refusal(res, token, "reading the profile")
+        raise SpotifyError(f"could not read the Spotify profile ({res.status_code})")
+    return res.json()
+
+
 def missing_scopes(token: dict) -> list[str]:
     """Scopes we asked for that this token was not actually granted."""
     granted = set((token.get("scope") or "").split())
@@ -250,12 +270,13 @@ def create_playlist(token: dict, name: str, description: str, tracks: list[dict]
                 )
             raise SpotifyError(
                 f"Spotify refused to create the playlist: {_detail(created)}. "
-                f"The login granted everything it needs "
-                f"({token.get('scope') or 'no scope reported'}), so this is not "
-                f"about the connection. While an app is in development mode "
-                f"Spotify only allows accounts listed on it, and reads succeed "
-                f"for everyone while writes do not. Add your Spotify account "
-                f"under User Management in the app's dashboard settings."
+                f"The login granted every scope it needs, so this is not about "
+                f"permissions. You are connected as {identify(profile)}. While "
+                f"the app is in development mode Spotify only allows accounts "
+                f"listed under User Management, matched on email. If the "
+                f"address listed there is not this one, that is the mismatch. "
+                f"Log out of Spotify in your browser and connect again as the "
+                f"listed account, or add this one."
             )
         if created.status_code not in (200, 201):
             log_refusal(created, token, "creating the playlist")

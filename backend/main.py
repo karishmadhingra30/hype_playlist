@@ -221,6 +221,7 @@ def spotify_status(request: Request) -> dict:
         # rather than showing up later as a 403.
         "granted_scope": token.get("scope", ""),
         "missing_scopes": spotify.missing_scopes(token) if token else [],
+        "account": request.session.get("spotify_account") or {},
     }
 
 
@@ -247,8 +248,22 @@ def spotify_callback(request: Request, code: str = "", state: str = "", error: s
         return RedirectResponse("/?spotify=failed")
 
     request.session["spotify_token"] = token
+
+    # Record who authorized. When the app is in development mode this is the
+    # value Spotify matches against the dashboard's user list.
+    try:
+        profile = spotify.fetch_profile(token)
+        request.session["spotify_account"] = {
+            "email": profile.get("email", ""),
+            "display_name": profile.get("display_name", ""),
+            "id": profile.get("id", ""),
+        }
+        log.info("Spotify connected as %s", spotify.identify(profile))
+    except spotify.SpotifyError as exc:
+        log.warning("connected but could not read the profile: %s", exc)
+
     lacking = spotify.missing_scopes(token)
-    log.info("Spotify connected. Granted scope: %r", token.get("scope", ""))
+    log.info("Granted scope: %r", token.get("scope", ""))
     if lacking:
         log.warning(
             "Spotify did not grant %s. Creating a playlist will fail with 403.",
@@ -276,6 +291,7 @@ def spotify_create(request: Request, req: ExportRequest) -> dict:
     except spotify.SpotifyError as exc:
         # An expired refresh token is the common case; make them reconnect.
         request.session.pop("spotify_token", None)
+        request.session.pop("spotify_account", None)
         raise HTTPException(status_code=502, detail=str(exc))
 
 

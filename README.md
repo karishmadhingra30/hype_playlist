@@ -81,6 +81,12 @@ keep working, because `/v1/me` and `/v1/search` need no user permission at
 all, so the connection looks healthy and only creating the playlist returns
 403 Forbidden.
 
+Spotify matches that list on email, against the account that authorized in the
+browser. Those are easy to get out of step if you have more than one Spotify
+login. Once connected, the app shows **Connected as** and the account's email
+under the export button, so you can compare it against the dashboard without
+guessing. Reading that email is why `user-read-email` is in the scope list.
+
 The flow is Authorization Code. It asks for `playlist-modify-private` and
 `playlist-modify-public`, and creates every playlist private. Spotify treats
 creating a playlist as a write whichever way it is flagged, so asking for only

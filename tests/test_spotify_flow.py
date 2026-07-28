@@ -49,7 +49,13 @@ async def token(request: Request):
 
 @mock.get("/v1/me")
 def me():
-    return {"id": "tester", "display_name": "Tester"}
+    return {
+        "id": "tester",
+        "display_name": "Tester",
+        # Only present because user-read-email was granted. This is the field
+        # the dashboard's user list is matched on.
+        "email": "listed@example.com",
+    }
 
 
 # Field-scoped queries that resolve. Nightcall (Reprise) deliberately maps to
@@ -69,7 +75,7 @@ RECEIVED: dict = {"uris": [], "playlist": None}
 # Switches so one mock can play both a healthy account and the stale-grant
 # case that produced a 403 in the wild.
 BEHAVIOUR: dict = {
-    "granted_scope": "playlist-modify-private playlist-modify-public",
+    "granted_scope": "playlist-modify-private playlist-modify-public user-read-email",
     "create_status": 201,
     "create_message": "Insufficient client scope",
 }
@@ -171,6 +177,8 @@ def main() -> None:
         # The granted scope must be visible, since it is what a 403 turns on.
         assert status["granted_scope"] == BEHAVIOUR["granted_scope"], status
         assert status["missing_scopes"] == [], status
+        # The UI has to be able to say which account it will write to.
+        assert status["account"]["email"] == "listed@example.com", status
 
         result = client.post(
             "/api/spotify/create",
@@ -204,7 +212,9 @@ def main() -> None:
     with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
         client.get("/api/spotify/login")
         status = client.get("/api/spotify/status").json()
-        assert status["missing_scopes"] == ["playlist-modify-public"], status
+        assert status["missing_scopes"] == [
+            "playlist-modify-public", "user-read-email",
+        ], status
 
         refused = client.post(
             "/api/spotify/create",
@@ -223,7 +233,7 @@ def main() -> None:
     # The second 403: every scope granted, Spotify still refuses with a bare
     # "Forbidden". An earlier version invented a missing scope here, which sent
     # the debugging in the wrong direction. It must not claim that again.
-    BEHAVIOUR["granted_scope"] = "playlist-modify-private playlist-modify-public"
+    BEHAVIOUR["granted_scope"] = "playlist-modify-private playlist-modify-public user-read-email"
     BEHAVIOUR["create_message"] = "Forbidden"
 
     with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
@@ -239,7 +249,10 @@ def main() -> None:
     assert "missing" not in second.lower(), second
     assert "development mode" in second, second
     assert "User Management" in second, second
-    print("[ ok ] a 403 with every scope granted blames the right thing")
+    # Naming the account is the whole point: an allowlisted address does not
+    # help if the browser authorized a different Spotify account.
+    assert "listed@example.com" in second, second
+    print("[ ok ] a 403 with every scope granted names the connected account")
     print("       message:", second)
 
     print()
