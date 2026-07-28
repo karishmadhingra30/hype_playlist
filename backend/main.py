@@ -272,6 +272,26 @@ def spotify_callback(request: Request, code: str = "", state: str = "", error: s
     return RedirectResponse("/?spotify=connected")
 
 
+@app.get("/api/spotify/probe")
+def spotify_probe(request: Request) -> dict:
+    """Diagnostic. Open in a browser while connected to see what Spotify allows."""
+    require_spotify()
+    token = request.session.get("spotify_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not connected to Spotify.")
+    try:
+        token = spotify.ensure_fresh(token)
+        request.session["spotify_token"] = token
+        report = spotify.probe(token)
+    except spotify.SpotifyError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    log.warning("Spotify probe: %s", report.get("verdict"))
+    for entry in report.get("attempts", []):
+        log.warning("  %s -> %s %s", entry["attempt"], entry["status"],
+                    entry.get("body", ""))
+    return report
+
+
 @app.post("/api/spotify/create")
 def spotify_create(request: Request, req: ExportRequest) -> dict:
     require_spotify()

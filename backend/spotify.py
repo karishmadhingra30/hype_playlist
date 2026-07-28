@@ -221,6 +221,92 @@ def search_track(http: httpx.Client, token: dict, title: str, artist: str) -> st
     return None
 
 
+PROBE_NAME = "Hype Playlist connection probe"
+
+
+def probe(token: dict) -> dict:
+    """Try several ways of creating a playlist and report what each one does.
+
+    Three rounds of reasoning about a bare 403 produced three wrong answers.
+    This settles it by experiment: if every variant fails the account or the
+    app is the problem, and if one succeeds the request body or the endpoint
+    was the problem.
+    """
+    report: dict = {"attempts": [], "cleaned_up": []}
+
+    with httpx.Client(timeout=TIMEOUT) as http:
+        me = http.get(f"{API}/me", headers=_headers(token))
+        report["profile_status"] = me.status_code
+        if me.status_code != 200:
+            report["profile_body"] = me.text[:400]
+            return report
+
+        profile = me.json()
+        uid = profile["id"]
+        report["account"] = identify(profile)
+        report["granted_scope"] = token.get("scope", "")
+
+        # Can it read the library at all?
+        listing = http.get(
+            f"{API}/me/playlists", params={"limit": 1}, headers=_headers(token)
+        )
+        report["read_own_playlists"] = listing.status_code
+
+        attempts = [
+            ("POST /v1/users/{id}/playlists  name only",
+             f"{API}/users/{uid}/playlists", {"name": PROBE_NAME}),
+            ("POST /v1/users/{id}/playlists  public true",
+             f"{API}/users/{uid}/playlists", {"name": PROBE_NAME, "public": True}),
+            ("POST /v1/users/{id}/playlists  public false",
+             f"{API}/users/{uid}/playlists", {"name": PROBE_NAME, "public": False}),
+            ("POST /v1/users/{id}/playlists  with description",
+             f"{API}/users/{uid}/playlists",
+             {"name": PROBE_NAME, "public": False, "description": "probe"}),
+            ("POST /v1/me/playlists  name only",
+             f"{API}/me/playlists", {"name": PROBE_NAME}),
+        ]
+
+        for label, url, body in attempts:
+            res = http.post(url, json=body, headers=_headers(token))
+            entry = {"attempt": label, "status": res.status_code}
+            if res.status_code in (200, 201):
+                created = res.json()
+                entry["created_id"] = created.get("id")
+                # Unfollowing is how a playlist is removed from a library.
+                gone = http.delete(
+                    f"{API}/playlists/{created.get('id')}/followers",
+                    headers=_headers(token),
+                )
+                entry["cleanup_status"] = gone.status_code
+                report["cleaned_up"].append(created.get("id"))
+            else:
+                entry["body"] = res.text[:300]
+            report["attempts"].append(entry)
+
+    report["verdict"] = verdict(report)
+    return report
+
+
+def verdict(report: dict) -> str:
+    codes = {a["status"] for a in report["attempts"]}
+    worked = [a["attempt"] for a in report["attempts"] if a["status"] in (200, 201)]
+    if worked:
+        return (
+            "At least one form of creating a playlist works: "
+            + "; ".join(worked)
+            + ". The account is fine and the app code should use that form."
+        )
+    if codes == {403}:
+        return (
+            "Every way of creating a playlist returns 403 while reads succeed. "
+            "Nothing in the request body explains that, so the block is on the "
+            "Spotify app or the account, not on this code. Check that the app "
+            "has Web API enabled in the dashboard, and that this exact account "
+            "is on its user list."
+        )
+    return f"Mixed results across attempts: {sorted(codes)}."
+
+
 def create_playlist(token: dict, name: str, description: str, tracks: list[dict]) -> dict:
     """Create a private playlist and add every track we could find.
 

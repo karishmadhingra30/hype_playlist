@@ -104,6 +104,21 @@ the result actually matches. Anything still unmatched is reported by name
 ("Added 10 of 12. Couldn't find: ..."). No song is ever swapped in for one
 that could not be found.
 
+### When export is refused
+
+If creating the playlist fails and the reason is not obvious, connect Spotify
+and then open:
+
+```
+http://127.0.0.1:8000/api/spotify/probe
+```
+
+It tries five different ways of creating a playlist, reports the status and
+body of each, deletes anything it manages to create, and states a verdict. If
+every variant returns 403 while reads succeed, the block is on the Spotify app
+or the account rather than on this code. If one variant succeeds, that is the
+form the export should use.
+
 ## Tests
 
 `tests/test_spotify_flow.py` runs the whole export against a stand-in for the

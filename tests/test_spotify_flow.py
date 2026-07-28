@@ -108,6 +108,22 @@ async def create(user_id: str, request: Request):
     )
 
 
+@mock.get("/v1/me/playlists")
+def my_playlists(limit: int = 1):
+    return {"items": [], "total": 0}
+
+
+@mock.post("/v1/me/playlists")
+async def create_for_me(request: Request):
+    return await create("tester", request)
+
+
+@mock.delete("/v1/playlists/{pid}/followers")
+def unfollow(pid: str):
+    RECEIVED.setdefault("unfollowed", []).append(pid)
+    return JSONResponse({}, status_code=200)
+
+
 @mock.post("/v1/playlists/{pid}/tracks")
 async def add(pid: str, request: Request):
     RECEIVED["uris"].extend((await request.json())["uris"])
@@ -253,7 +269,27 @@ def main() -> None:
     # help if the browser authorized a different Spotify account.
     assert "listed@example.com" in second, second
     print("[ ok ] a 403 with every scope granted names the connected account")
-    print("       message:", second)
+
+    # The probe has to reach a verdict, and must not leave test playlists
+    # behind when a create does succeed.
+    BEHAVIOUR["create_status"] = 403
+    with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
+        client.get("/api/spotify/login")
+        blocked = client.get("/api/spotify/probe").json()
+    assert len(blocked["attempts"]) == 5, blocked
+    assert {a["status"] for a in blocked["attempts"]} == {403}, blocked
+    assert "not on this code" in blocked["verdict"], blocked["verdict"]
+    print("[ ok ] probe: every create refused, verdict points away from the code")
+
+    BEHAVIOUR["create_status"] = 201
+    RECEIVED["unfollowed"] = []
+    with httpx.Client(base_url=base, follow_redirects=True, timeout=20) as client:
+        client.get("/api/spotify/login")
+        allowed = client.get("/api/spotify/probe").json()
+    assert {a["status"] for a in allowed["attempts"]} == {201}, allowed
+    assert "works" in allowed["verdict"], allowed["verdict"]
+    assert len(RECEIVED["unfollowed"]) == 5, RECEIVED["unfollowed"]
+    print("[ ok ] probe: successes are reported and cleaned up after")
 
     print()
     print("added        ", body["added"], "of", body["requested"])
