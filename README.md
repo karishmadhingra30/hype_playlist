@@ -67,11 +67,50 @@ If an export fails for an unclear reason, connect Spotify and open
 `/api/spotify/probe`. It tries three ways of creating a playlist, reports each
 one, deletes anything it creates, and states a verdict.
 
+## Deploying
+
+`render.yaml` is a Render blueprint. Create a Blueprint instance from this
+repo and Render reads it. It runs uvicorn as a normal process, so a slow
+generation is not cut short by a function timeout.
+
+Set the secrets in the Render dashboard, not in git:
+
+- `ANTHROPIC_API_KEY`
+- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` if you want export
+- `SPOTIFY_REDIRECT_URI` as `https://<your-domain>/api/spotify/callback`
+
+Render generates `SESSION_SECRET` itself and keeps it, so Spotify connections
+survive restarts. `SESSION_HTTPS_ONLY` is set to 1 so the session cookie never
+travels over plain HTTP.
+
+After the first deploy, add the production redirect URI to the Spotify
+dashboard as well. It must match the environment variable exactly, and an app
+can hold several redirect URIs, so keep the local one alongside it.
+
+The free plan sleeps when idle, so the first request after a quiet spell takes
+a while. `/healthz` is the health check.
+
+### Spend limits
+
+Every visitor spends the deployer's Anthropic key, so generation is capped per
+day:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RATE_LIMIT_PER_IP` | 5 | Playlists per visitor per day. |
+| `RATE_LIMIT_PER_DAY` | 200 | Playlists across the whole site per day. |
+
+Set either to 0 to turn it off. A request that fails is refunded, so a visitor
+never loses an allowance to a server error. Counters are held in memory and
+reset on restart, which suits a single instance. Running more than one
+instance would give each its own counters.
+
 ## Tests
 
 ```bash
 python -m tests.test_playlist        # parsing, retry, trimming
 python -m tests.test_spotify_flow    # OAuth and export
+python -m tests.test_limits          # daily spend caps
 ```
 
 Neither needs credentials or network access. `test_spotify_flow` runs the real
@@ -110,6 +149,7 @@ GET  /api/spotify/probe      diagnostic for a failing export
 ```
 backend/
   main.py      routes, JSON parsing, retry
+  limits.py    daily spend caps
   prompts.py   system prompt and output schema
   spotify.py   OAuth and playlist creation
 static/
@@ -119,6 +159,7 @@ static/
 scripts/
   check_spotify.py
 tests/
+  test_limits.py
   test_playlist.py
   test_spotify_flow.py
 ```
