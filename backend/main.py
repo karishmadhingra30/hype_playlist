@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import limits, spotify
+from . import spotify
 from .prompts import (
     PLAYLIST_SCHEMA,
     SYSTEM_PROMPT,
@@ -44,23 +44,15 @@ app = FastAPI(title="Hype Playlist", docs_url=None, redoc_url=None)
 SESSION_SECRET = os.environ.get("SESSION_SECRET")
 if not SESSION_SECRET:
     log.warning(
-        "SESSION_SECRET is not set. Using a random one, so every restart "
-        "disconnects Spotify. Set it in production."
+        "SESSION_SECRET is not set, so a random one is used and every restart "
+        "disconnects Spotify. Put any random string in .env to keep it."
     )
 
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET or secrets.token_hex(32),
     same_site="lax",
-    # Behind HTTPS the session cookie should not travel over plain HTTP.
-    https_only=os.environ.get("SESSION_HTTPS_ONLY", "").lower() in ("1", "true"),
-)
-
-limiter = limits.from_env()
-log.info(
-    "Generation limits: %s per IP per day, %s per day overall (0 means off).",
-    limiter.per_ip,
-    limiter.per_day,
+    https_only=False,
 )
 
 if not spotify.is_configured():
@@ -160,23 +152,14 @@ def describe_failure(attempt: int, response, raw: str, reason: str) -> None:
     log.warning("full response text: %s", raw or "<empty>")
 
 
-@app.get("/healthz")
-def healthz() -> dict:
-    """Render pings this to decide whether the instance is up."""
-    return {"ok": True}
-
-
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.post("/api/playlist")
-def create_playlist(request: Request, req: PlaylistRequest) -> dict:
+def create_playlist(req: PlaylistRequest) -> dict:
     client = get_client()
-    ip = limits.client_ip(request)
-    limiter.check(ip)
-
     wanted = TRACK_COUNTS[req.length]
     prompt = build_user_prompt(req.situation, req.length, req.vibe)
 
@@ -193,13 +176,10 @@ def create_playlist(request: Request, req: PlaylistRequest) -> dict:
                 messages=[{"role": "user", "content": prompt}],
             )
         except anthropic.AuthenticationError:
-            limiter.refund(ip)
             raise HTTPException(status_code=503, detail="Anthropic rejected the API key.")
         except anthropic.RateLimitError:
-            limiter.refund(ip)
             raise HTTPException(status_code=429, detail="Rate limited. Try again shortly.")
         except anthropic.APIError as exc:
-            limiter.refund(ip)
             raise HTTPException(status_code=502, detail=f"Anthropic call failed: {exc}")
 
         raw = "".join(b.text for b in response.content if b.type == "text")
@@ -224,7 +204,6 @@ def create_playlist(request: Request, req: PlaylistRequest) -> dict:
                      len(data["tracks"]), wanted)
         return data
 
-    limiter.refund(ip)
     raise HTTPException(
         status_code=502,
         detail="Claude returned something that was not a playlist. Try again.",
